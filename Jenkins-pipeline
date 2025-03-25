@@ -1,0 +1,51 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = 'us-east-1'
+        IMAGE_TAG = 'latest'
+        EC2_INSTANCE = 'ec2-user@your-ec2-ip'
+    }
+
+    stages {
+        stage('Clone Repository') {
+            steps {
+                git branch: 'main', credentialsId: 'github-ssh-key', url: 'git@github.com:Kem123123/glerEnterprises-Front-End.git'
+            }
+        }
+
+        stage('Build Docker Images') {
+            steps {
+                sh '''
+                docker build -t notification-service:latest ./notification-module
+                docker build -t auth-service:latest ./auth-service
+                docker pull rabbitmq:3-management
+                '''
+            }
+        }
+
+        stage('Push Docker Images to AWS ECR') {
+            steps {
+                sh '''
+                aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin <AWS_ACCOUNT_ID>.dkr.ecr.$AWS_REGION.amazonaws.com
+                docker tag notification-service:latest <AWS_ACCOUNT_ID>.dkr.ecr.$AWS_REGION.amazonaws.com/notification-service:$IMAGE_TAG
+                docker tag auth-service:latest <AWS_ACCOUNT_ID>.dkr.ecr.$AWS_REGION.amazonaws.com/auth-service:$IMAGE_TAG
+                docker push <AWS_ACCOUNT_ID>.dkr.ecr.$AWS_REGION.amazonaws.com/notification-service:$IMAGE_TAG
+                docker push <AWS_ACCOUNT_ID>.dkr.ecr.$AWS_REGION.amazonaws.com/auth-service:$IMAGE_TAG
+                '''
+            }
+        }
+
+        stage('Deploy to EC2') {
+            steps {
+                sh '''
+                ssh -o StrictHostKeyChecking=no $EC2_INSTANCE << 'EOF'
+                docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+                docker run -d --name notification-service -p 8081:8081 <AWS_ACCOUNT_ID>.dkr.ecr.$AWS_REGION.amazonaws.com/notification-service:$IMAGE_TAG
+                docker run -d --name auth-service -p 8082:8082 <AWS_ACCOUNT_ID>.dkr.ecr.$AWS_REGION.amazonaws.com/auth-service:$IMAGE_TAG
+                EOF
+                '''
+            }
+        }
+    }
+}
